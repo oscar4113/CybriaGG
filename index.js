@@ -22,6 +22,16 @@ const proxy = createProxyMiddleware({
     },
     onProxyRes: (proxyRes, req, res) => {
         if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
+            // Handle 304 Not Modified *differently*
+            if (proxyRes.statusCode === 304) {
+                console.log(`[${req.method}] ${req.url} -> 304 Not Modified`);
+                //  Remove the 'transfer-encoding' header if it is set, to prevent errors.
+                delete proxyRes.headers['transfer-encoding'];
+                res.writeHead(proxyRes.statusCode, proxyRes.headers);
+                res.end(); //  End the response.  There's no body for a 304.
+                return;
+            }
+
             const location = proxyRes.headers.location;
             if (location) {
                 console.log(`[${req.method}] ${req.url} -> Redirected to ${location} (Status: ${proxyRes.statusCode})`);
@@ -32,7 +42,7 @@ const proxy = createProxyMiddleware({
                 } catch (e) {
                     console.error(`[${req.method}] ${req.url} -> Invalid redirect URL: ${location}`);
                     res.writeHead(500, { 'Content-Type': 'text/plain' });
-                    res.end(`Internal Server Error: Invalid redirect URL: ${location}`); // Include the invalid URL in the error message.
+                    res.end(`Internal Server Error: Invalid redirect URL: ${location}`);
                     return;
                 }
 
@@ -70,9 +80,9 @@ const proxy = createProxyMiddleware({
 
             } else {
                 // No Location header, but it's a 3xx response.  This is an error.
-                console.error(`[${req.method}] ${req.url} -> 3xx response without Location header.  Status Code: ${proxyRes.statusCode}`); // Include the status code
+                console.error(`[${req.method}] ${req.url} -> 3xx response without Location header.  Status Code: ${proxyRes.statusCode}`);
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end(`Internal Server Error: 3xx response without Location header. Status Code: ${proxyRes.statusCode}`); // Include the status code in the response
+                res.end(`Internal Server Error: 3xx response without Location header. Status Code: ${proxyRes.statusCode}`);
             }
         } else {
             proxyRes.pipe(res);
