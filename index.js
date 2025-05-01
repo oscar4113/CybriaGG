@@ -1,7 +1,7 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const https = require('https');
-const http = require('http'); // Import http
+const http = require('http');
 
 const app = express();
 const nggUrl = 'https://now.gg';
@@ -11,7 +11,7 @@ const proxy = createProxyMiddleware({
     changeOrigin: true,
     secure: true,
     logLevel: 'debug',
-    followRedirects: false, // Important:  We'll handle redirects manually for full control
+    followRedirects: false,
     router: function (req) {
         if (req.headers.host === 'now.gg') {
             req.headers['X-Forwarded-For'] = '';
@@ -28,27 +28,26 @@ const proxy = createProxyMiddleware({
 
                 let targetUrl;
                 try {
-                    targetUrl = new URL(location, nggUrl).href; // Resolve relative URLs
+                    targetUrl = new URL(location, nggUrl).href;
                 } catch (e) {
                     console.error(`[${req.method}] ${req.url} -> Invalid redirect URL: ${location}`);
                     res.writeHead(500, { 'Content-Type': 'text/plain' });
-                    res.end(`Internal Server Error: Invalid redirect URL`);
-                    return; // Stop processing this request
+                    res.end(`Internal Server Error: Invalid redirect URL: ${location}`); // Include the invalid URL in the error message.
+                    return;
                 }
 
-                const redirectRequest = (targetUrl.startsWith('https://')) ? https.request : http.request; // Use http or https
+                const redirectRequest = (targetUrl.startsWith('https://')) ? https.request : http.request;
 
                 const redirectOptions = {
-                    method: 'GET', //  Use GET for simplicity and to avoid potential issues with re-sending POST data.  This is the most robust approach for a general proxy.
+                    method: 'GET',
                     url: targetUrl,
-                    headers: { ...req.headers, host: new URL(targetUrl).host }, // Correct host header
-                    followRedirects: false //  Do NOT let the underlying http/https client follow redirects.  We are in control.
+                    headers: { ...req.headers, host: new URL(targetUrl).host },
+                    followRedirects: false
                 };
 
                 const redirectReq = redirectRequest(targetUrl, (redirectRes) => {
-                    // Copy headers and status code
                     res.writeHead(redirectRes.statusCode, redirectRes.headers);
-                    redirectRes.pipe(res); // Pipe the data
+                    redirectRes.pipe(res);
 
                     redirectRes.on('end', () => {
                         console.log(`[${req.method}] ${req.url} -> Successfully handled redirect to ${targetUrl}`);
@@ -67,16 +66,15 @@ const proxy = createProxyMiddleware({
                     res.end(`Error: ${err.message}`);
                 });
 
-                redirectReq.end(); // Start the redirect request
+                redirectReq.end();
 
             } else {
                 // No Location header, but it's a 3xx response.  This is an error.
-                console.error(`[${req.method}] ${req.url} -> 3xx response without Location header`);
+                console.error(`[${req.method}] ${req.url} -> 3xx response without Location header.  Status Code: ${proxyRes.statusCode}`); // Include the status code
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end("Internal Server Error: 3xx response without Location header");
+                res.end(`Internal Server Error: 3xx response without Location header. Status Code: ${proxyRes.statusCode}`); // Include the status code in the response
             }
         } else {
-            // Not a redirect, so just pipe the original proxy response
             proxyRes.pipe(res);
         }
     }
