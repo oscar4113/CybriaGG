@@ -53,11 +53,32 @@ const proxy = createProxyMiddleware({
         });
 
         proxyRes.on('end', () => {
-            if (responseSent) return; // Prevent multiple sends
+            if (responseSent) {
+                console.warn(`[${req.method}] ${req.url} -> Response already sent, skipping.`);
+                return; // Prevent multiple sends
+            }
             responseSent = true;
-            const fullData = Buffer.concat(responseData);
+            let fullData;
+            try{
+                fullData = Buffer.concat(responseData);
+            } catch(error){
+                console.error(`[${req.method}] ${req.url} -> Error concatenating data: ${error.message}`);
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(`Internal Server Error: Error concatenating response data.`);
+                return;
+            }
+
             const encoding = proxyRes.headers['original-content-encoding'] || proxyRes.headers['content-encoding']; // Check for original
-            const decompressedData = handleDecompression(fullData, encoding);
+            let decompressedData;
+            try {
+                decompressedData = handleDecompression(fullData, encoding);
+            } catch (error) {
+                console.error(`[${req.method}] ${req.url} -> Decompression failed: ${error.message}`);
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(`Internal Server Error: Decompression Failed`);
+                return;
+            }
+
 
             if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
                 if (proxyRes.statusCode === 304) {
@@ -81,28 +102,43 @@ const proxy = createProxyMiddleware({
                     }
 
                     const redirectRequest = (targetUrl.startsWith('https://')) ? https.request : http.request;
-                    const redirectOptions = {
-                        method: 'GET',
-                        url: targetUrl,
-                        headers: { ...req.headers, host: new URL(targetUrl).host },
-                        followRedirects: false
-                    };
+
 
                     const redirectReq = redirectRequest(targetUrl, (redirectRes) => {
                         delete redirectRes.headers['content-encoding'];
                         delete redirectRes.headers['transfer-encoding'];
                         let redirectResponseData = [];
+                        let redirectResponseSent = false;
 
                         redirectRes.on('data', (chunk) => {
                             redirectResponseData.push(chunk);
                         });
 
                         redirectRes.on('end', () => {
-                            if (responseSent) return;
-                            responseSent = true;
-                            const fullRedirectData = Buffer.concat(redirectResponseData);
+                            if (redirectResponseSent) {
+                                 console.warn(`[${req.method}] ${req.url} -> Redirect Response already sent, skipping.`);
+                                return;
+                            }
+                            redirectResponseSent = true;
+                            let fullRedirectData;
+                             try{
+                                fullRedirectData = Buffer.concat(redirectResponseData);
+                            } catch(error){
+                                console.error(`[${req.method}] ${req.url} -> Error concatenating redirect data: ${error.message}`);
+                                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                                res.end(`Internal Server Error: Error concatenating redirect response data.`);
+                                return;
+                            }
                             const redirectEncoding = redirectRes.headers['original-content-encoding'] || redirectRes.headers['content-encoding'];
-                            const decompressedRedirectData = handleDecompression(fullRedirectData, redirectEncoding);
+                            let decompressedRedirectData;
+                            try{
+                                decompressedRedirectData = handleDecompression(fullRedirectData, redirectEncoding);
+                            } catch(error) {
+                                console.error(`[${req.method}] ${req.url} -> Decompression error during redirect: ${error.message}`);
+                                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                                res.end(`Internal Server Error: Decompression error during redirect.`);
+                                return;
+                            }
                             res.writeHead(redirectRes.statusCode, redirectRes.headers);
                             res.end(decompressedRedirectData);
                             console.log(`[${req.method}] ${req.url} -> Successfully handled redirect to ${targetUrl}`);
@@ -110,14 +146,20 @@ const proxy = createProxyMiddleware({
 
                         redirectRes.on('error', (err) => {
                             console.error(`[${req.method}] ${req.url} -> Error during redirect: ${err.message}`);
-                            if (!responseSent){
-                                responseSent = true;
+                            if (!redirectResponseSent) {
+                                redirectResponseSent = true;
                                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                                 res.end(`Error during redirect: ${err.message}`);
                             }
 
                         });
                     });
+                    const redirectOptions = {
+                        method: 'GET',
+                        url: targetUrl,
+                        headers: { ...req.headers, host: new URL(targetUrl).host },
+                        followRedirects: false
+                    };
 
                     redirectReq.on('error', (err) => {
                         console.error(`[${req.method}] ${req.url} -> Error initiating redirect request: ${err.message}`);
@@ -127,8 +169,8 @@ const proxy = createProxyMiddleware({
                             res.end(`Error: ${err.message}`);
                         }
                     });
-
                     redirectReq.end();
+
                 } else {
                     console.error(`[${req.method}] ${req.url} -> 3xx response without Location header.  Status Code: ${proxyRes.statusCode}`);
                     res.writeHead(500, { 'Content-Type': 'text/plain' });
@@ -143,11 +185,11 @@ const proxy = createProxyMiddleware({
 
         proxyRes.on('error', (err) => {
             console.error(`[${req.method}] ${req.url} -> proxyRes error:  ${err.message}`);
-             if (!responseSent) {
+            if (!responseSent) {
                 responseSent = true;
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end(`Proxy Error: ${err.message}`);
-             }
+            }
         });
     }
 });
