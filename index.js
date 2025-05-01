@@ -28,6 +28,7 @@ const proxy = createProxyMiddleware({
 
         // Array to store the response data chunks
         let responseData = [];
+        let responseSent = false; // Track if response has been sent
 
         // Function to handle decompression based on original encoding
         const handleDecompression = (data, encoding) => {
@@ -52,11 +53,13 @@ const proxy = createProxyMiddleware({
         });
 
         proxyRes.on('end', () => {
+            if (responseSent) return; // Prevent multiple sends
+            responseSent = true;
             const fullData = Buffer.concat(responseData);
             const encoding = proxyRes.headers['original-content-encoding'] || proxyRes.headers['content-encoding']; // Check for original
             const decompressedData = handleDecompression(fullData, encoding);
 
-             if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
+            if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
                 if (proxyRes.statusCode === 304) {
                     console.log(`[${req.method}] ${req.url} -> 304 Not Modified`);
                     res.writeHead(proxyRes.statusCode, proxyRes.headers);
@@ -95,6 +98,8 @@ const proxy = createProxyMiddleware({
                         });
 
                         redirectRes.on('end', () => {
+                            if (responseSent) return;
+                            responseSent = true;
                             const fullRedirectData = Buffer.concat(redirectResponseData);
                             const redirectEncoding = redirectRes.headers['original-content-encoding'] || redirectRes.headers['content-encoding'];
                             const decompressedRedirectData = handleDecompression(fullRedirectData, redirectEncoding);
@@ -105,15 +110,22 @@ const proxy = createProxyMiddleware({
 
                         redirectRes.on('error', (err) => {
                             console.error(`[${req.method}] ${req.url} -> Error during redirect: ${err.message}`);
-                            res.writeHead(500, { 'Content-Type': 'text/plain' });
-                            res.end(`Error during redirect: ${err.message}`);
+                            if (!responseSent){
+                                responseSent = true;
+                                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                                res.end(`Error during redirect: ${err.message}`);
+                            }
+
                         });
                     });
 
                     redirectReq.on('error', (err) => {
                         console.error(`[${req.method}] ${req.url} -> Error initiating redirect request: ${err.message}`);
-                        res.writeHead(500, { 'Content-Type': 'text/plain' });
-                        res.end(`Error: ${err.message}`);
+                        if (!responseSent) {
+                            responseSent = true;
+                            res.writeHead(500, { 'Content-Type': 'text/plain' });
+                            res.end(`Error: ${err.message}`);
+                        }
                     });
 
                     redirectReq.end();
@@ -131,8 +143,11 @@ const proxy = createProxyMiddleware({
 
         proxyRes.on('error', (err) => {
             console.error(`[${req.method}] ${req.url} -> proxyRes error:  ${err.message}`);
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end(`Proxy Error: ${err.message}`);
+             if (!responseSent) {
+                responseSent = true;
+                res.writeHead(500, { 'Content-Type': 'text/plain' });
+                res.end(`Proxy Error: ${err.message}`);
+             }
         });
     }
 });
