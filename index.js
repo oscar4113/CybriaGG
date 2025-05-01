@@ -29,6 +29,7 @@ const proxy = createProxyMiddleware({
         // Array to store the response data chunks
         let responseData = [];
         let responseSent = false; // Track if response has been sent
+        let isError = false;
 
         // Function to handle decompression based on original encoding
         const handleDecompression = (data, encoding) => {
@@ -44,6 +45,7 @@ const proxy = createProxyMiddleware({
                 }
             } catch (error) {
                 console.error(`[${req.method}] ${req.url} -> Decompression error: ${error.message}`);
+                isError = true;
                 return Buffer.from(`Error decompressing response: ${error.message}`, 'utf-8');
             }
         };
@@ -53,16 +55,17 @@ const proxy = createProxyMiddleware({
         });
 
         proxyRes.on('end', () => {
-            if (responseSent) {
-                console.warn(`[${req.method}] ${req.url} -> Response already sent, skipping.`);
+            if (responseSent || isError) {
+                console.warn(`[${req.method}] ${req.url} -> Response already sent or error occurred, skipping.`);
                 return; // Prevent multiple sends
             }
             responseSent = true;
             let fullData;
-            try{
+            try {
                 fullData = Buffer.concat(responseData);
-            } catch(error){
+            } catch (error) {
                 console.error(`[${req.method}] ${req.url} -> Error concatenating data: ${error.message}`);
+                isError = true;
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end(`Internal Server Error: Error concatenating response data.`);
                 return;
@@ -74,6 +77,7 @@ const proxy = createProxyMiddleware({
                 decompressedData = handleDecompression(fullData, encoding);
             } catch (error) {
                 console.error(`[${req.method}] ${req.url} -> Decompression failed: ${error.message}`);
+                isError = true;
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end(`Internal Server Error: Decompression Failed`);
                 return;
@@ -96,6 +100,7 @@ const proxy = createProxyMiddleware({
                         targetUrl = new URL(location, nggUrl).href;
                     } catch (e) {
                         console.error(`[${req.method}] ${req.url} -> Invalid redirect URL: ${location}`);
+                        isError = true;
                         res.writeHead(500, { 'Content-Type': 'text/plain' });
                         res.end(`Internal Server Error: Invalid redirect URL: ${location}`);
                         return;
@@ -109,32 +114,35 @@ const proxy = createProxyMiddleware({
                         delete redirectRes.headers['transfer-encoding'];
                         let redirectResponseData = [];
                         let redirectResponseSent = false;
+                        let redirectIsError = false;
 
                         redirectRes.on('data', (chunk) => {
                             redirectResponseData.push(chunk);
                         });
 
                         redirectRes.on('end', () => {
-                            if (redirectResponseSent) {
-                                 console.warn(`[${req.method}] ${req.url} -> Redirect Response already sent, skipping.`);
+                            if (redirectResponseSent || redirectIsError) {
+                                console.warn(`[${req.method}] ${req.url} -> Redirect Response already sent or error occurred, skipping.`);
                                 return;
                             }
                             redirectResponseSent = true;
                             let fullRedirectData;
-                             try{
+                            try {
                                 fullRedirectData = Buffer.concat(redirectResponseData);
-                            } catch(error){
+                            } catch (error) {
                                 console.error(`[${req.method}] ${req.url} -> Error concatenating redirect data: ${error.message}`);
+                                redirectIsError = true;
                                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                                 res.end(`Internal Server Error: Error concatenating redirect response data.`);
                                 return;
                             }
                             const redirectEncoding = redirectRes.headers['original-content-encoding'] || redirectRes.headers['content-encoding'];
                             let decompressedRedirectData;
-                            try{
+                            try {
                                 decompressedRedirectData = handleDecompression(fullRedirectData, redirectEncoding);
-                            } catch(error) {
+                            } catch (error) {
                                 console.error(`[${req.method}] ${req.url} -> Decompression error during redirect: ${error.message}`);
+                                redirectIsError = true;
                                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                                 res.end(`Internal Server Error: Decompression error during redirect.`);
                                 return;
@@ -148,6 +156,7 @@ const proxy = createProxyMiddleware({
                             console.error(`[${req.method}] ${req.url} -> Error during redirect: ${err.message}`);
                             if (!redirectResponseSent) {
                                 redirectResponseSent = true;
+                                redirectIsError = true;
                                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                                 res.end(`Error during redirect: ${err.message}`);
                             }
@@ -165,6 +174,7 @@ const proxy = createProxyMiddleware({
                         console.error(`[${req.method}] ${req.url} -> Error initiating redirect request: ${err.message}`);
                         if (!responseSent) {
                             responseSent = true;
+                            isError = true;
                             res.writeHead(500, { 'Content-Type': 'text/plain' });
                             res.end(`Error: ${err.message}`);
                         }
@@ -173,6 +183,7 @@ const proxy = createProxyMiddleware({
 
                 } else {
                     console.error(`[${req.method}] ${req.url} -> 3xx response without Location header.  Status Code: ${proxyRes.statusCode}`);
+                    isError = true;
                     res.writeHead(500, { 'Content-Type': 'text/plain' });
                     res.end(`Internal Server Error: 3xx response without Location header. Status Code: ${proxyRes.statusCode}`);
                 }
@@ -187,6 +198,7 @@ const proxy = createProxyMiddleware({
             console.error(`[${req.method}] ${req.url} -> proxyRes error:  ${err.message}`);
             if (!responseSent) {
                 responseSent = true;
+                isError = true;
                 res.writeHead(500, { 'Content-Type': 'text/plain' });
                 res.end(`Proxy Error: ${err.message}`);
             }
