@@ -21,14 +21,15 @@ const proxy = createProxyMiddleware({
         return nggUrl;
     },
     onProxyRes: (proxyRes, req, res) => {
+        // Remove problematic headers to prevent content encoding errors
+        delete proxyRes.headers['content-encoding'];
+        delete proxyRes.headers['transfer-encoding'];
+
         if (proxyRes.statusCode >= 300 && proxyRes.statusCode < 400) {
-            // Handle 304 Not Modified *differently*
             if (proxyRes.statusCode === 304) {
                 console.log(`[${req.method}] ${req.url} -> 304 Not Modified`);
-                //  Remove the 'transfer-encoding' header if it is set, to prevent errors.
-                delete proxyRes.headers['transfer-encoding'];
                 res.writeHead(proxyRes.statusCode, proxyRes.headers);
-                res.end(); //  End the response.  There's no body for a 304.
+                res.end();
                 return;
             }
 
@@ -56,6 +57,9 @@ const proxy = createProxyMiddleware({
                 };
 
                 const redirectReq = redirectRequest(targetUrl, (redirectRes) => {
+                    // Remove content-encoding and transfer-encoding headers from the redirect response as well
+                    delete redirectRes.headers['content-encoding'];
+                    delete redirectRes.headers['transfer-encoding'];
                     res.writeHead(redirectRes.statusCode, redirectRes.headers);
                     redirectRes.pipe(res);
 
@@ -85,6 +89,9 @@ const proxy = createProxyMiddleware({
                 res.end(`Internal Server Error: 3xx response without Location header. Status Code: ${proxyRes.statusCode}`);
             }
         } else {
+            // Remove content-encoding and transfer-encoding headers from the original response too
+            delete proxyRes.headers['content-encoding'];
+            delete proxyRes.headers['transfer-encoding'];
             proxyRes.pipe(res);
         }
     }
